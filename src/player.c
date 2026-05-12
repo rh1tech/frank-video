@@ -380,12 +380,19 @@ static void __not_in_flash_func(on_audio)(plm_t *mpeg, plm_samples_t *samples, v
 
 /* ===== File I/O callbacks ============================================== */
 
-static void plm_load_cb(plm_buffer_t *buf, void *user) {
+static void __not_in_flash_func(plm_load_cb)(plm_buffer_t *buf, void *user) {
+    /* Refill the pl_mpeg ring buffer from FatFS. SD reads sit on the decode
+     * critical path -- when pl_mpeg can't find a packet header in the ring
+     * it calls back here synchronously. Each f_read of N bytes costs a
+     * fixed FatFS overhead (cluster lookup, sector address calc) plus the
+     * actual SPI transfer; bigger blocks amortise the overhead. 64 KB is
+     * the sweet spot: large enough to hide FatFS overhead, small enough
+     * not to stall a long time at low buffer levels. */
     FIL *fil = (FIL *)user;
     if (buf->discard_read_bytes)
         plm_buffer_discard_read_bytes(buf);
     size_t bytes_available = buf->capacity - buf->length;
-    if (bytes_available > 32768) bytes_available = 32768;
+    if (bytes_available > 65536) bytes_available = 65536;
     UINT br = 0;
     f_read(fil, buf->bytes + buf->length, (UINT)bytes_available, &br);
     buf->length += br;
@@ -481,15 +488,24 @@ void player_play(const char *path) {
         i2s_audio_set_frame_rate(172);
         plm_set_audio_enabled(G.plm, TRUE);
         plm_set_audio_decode_callback(G.plm, on_audio, NULL);
-        plm_set_audio_lead_time(G.plm, 0.2f);
+        /* audio_lead_time controls how far ahead pl_mpeg decodes audio.
+         * Higher = bigger bursts of audio work in plm_decode() when video
+         * is behind. With our 16k-frame I2S ring already absorbing 370ms,
+         * we don't need pl_mpeg to look ahead at all -- 50ms is plenty to
+         * keep audio in sync. Halving from 200ms cuts the worst-case
+         * audio decode burst per plm_decode() call. */
+        plm_set_audio_lead_time(G.plm, 0.05f);
         G.audio_inited = true;
     } else {
         plm_set_audio_enabled(G.plm, FALSE);
     }
     plm_set_video_decode_callback(G.plm, on_video, NULL);
 
-    /* Main loop -- time-driven plm_decode. */
-    uint32_t last_tick = to_ms_since_boot(get_absolute_time());
+    /* Main loop -- time-driven decode. We compare pl_mpeg's video PTS to
+     * wall-clock time elapsed since playback start to decide whether to
+     * pull the next frame, so playback proceeds at exactly source rate. */
+    uint32_t playback_start_ms = to_ms_since_boot(get_absolute_time());
+    uint32_t last_tick = playback_start_ms;
     uint32_t prof_last_ms = last_tick;
     uint64_t prof_decode_us = 0;
     uint32_t prof_decode_calls = 0;
@@ -504,26 +520,73 @@ void player_play(const char *path) {
         }
 
         uint32_t now = to_ms_since_boot(get_absolute_time());
-        uint32_t elapsed_ms = now - last_tick;
         last_tick = now;
 
-        /* Cap each decode call at 150 ms so a single slow frame doesn't
-         * compound into a runaway: anything beyond that is repaid from
-         * time_debt across subsequent frames. */
-        uint32_t debt = G.time_debt;
-        uint32_t repay = (debt > 20) ? 20 : debt;
-        uint32_t feed = elapsed_ms + repay;
-        if (feed > 150) {
-            G.time_debt = debt - repay + (feed - 150);
-            feed = 150;
-        } else {
-            G.time_debt = debt - repay;
+        /* Custom decode loop, paced by wall clock. pl_mpeg's plm_decode()
+         * interleaves video and audio decode in a tight do-while; on hard
+         * B-frame scenes that bursts many audio frames back-to-back since
+         * audio time advances much faster than the stalled video. We do
+         * it ourselves so audio can never monopolise CPU during a slow
+         * video decode.
+         *
+         * Pacing rule: keep video PTS within ~10 ms ahead of wall clock,
+         * keep audio PTS within ~50 ms ahead of video PTS. Each iteration
+         * caps video at 4 decodes and audio at 4 (or 1 when debt>30 ms),
+         * so a single iteration's audio decode can never bury video. */
+        uint64_t t0 = time_us_64();
+
+        float wall_pos_s = (float)(now - playback_start_ms) * 0.001f;
+        float video_target_s = wall_pos_s + 0.010f;  /* 10 ms ahead */
+
+        for (int i = 0; i < 4; i++) {
+            if (plm_video_get_time(G.plm->video_decoder) >= video_target_s) break;
+            plm_frame_t *vf = plm_decode_video(G.plm);
+            if (!vf) break;
+            on_video(G.plm, vf, NULL);
         }
 
-        uint64_t t0 = time_us_64();
-        plm_decode(G.plm, (float)feed * 0.001f);
+        if (G.audio_inited) {
+            int max_audio = 4;
+            if (G.time_debt > 30) max_audio = 1;
+            float audio_target_s = plm_video_get_time(G.plm->video_decoder)
+                                 + 0.05f;
+            for (int i = 0; i < max_audio; i++) {
+                if (plm_audio_get_time(G.plm->audio_decoder) >= audio_target_s) break;
+                if (i2s_audio_stream_free() < 1500) break;
+                plm_samples_t *as = plm_decode_audio(G.plm);
+                if (!as) break;
+                on_audio(G.plm, as, NULL);
+            }
+        }
+
+        if (plm_has_ended(G.plm)) {
+            prof_decode_us += (time_us_64() - t0);
+            prof_decode_calls++;
+            break;
+        }
+
+        /* Update time_debt for the on_video skip heuristic. If video PTS
+         * is behind wall clock, we are accumulating debt; on_video uses
+         * this to drop renders rather than back up further. */
+        float vt = plm_video_get_time(G.plm->video_decoder);
+        if (vt < wall_pos_s) {
+            G.time_debt = (uint32_t)((wall_pos_s - vt) * 1000.0f);
+        } else {
+            G.time_debt = 0;
+        }
+
         prof_decode_us += (time_us_64() - t0);
         prof_decode_calls++;
+
+        /* Idle wait when caught up: the next decode is pointless until
+         * wall clock advances past video PTS, so nap. Without this we
+         * would burn CPU spinning while waiting for the next frame slot
+         * and waste battery. */
+        if (vt > wall_pos_s + 0.005f) {
+            uint32_t lead_ms = (uint32_t)((vt - wall_pos_s) * 1000.0f);
+            if (lead_ms > 30) lead_ms = 30;
+            sleep_ms(lead_ms);
+        }
 
         /* Once-per-second profile dump over USB CDC. Numbers reflect the
          * previous wall-clock second so they correspond directly to what

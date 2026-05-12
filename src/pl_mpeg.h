@@ -2338,7 +2338,7 @@ static const int PLM_START_USER_DATA = 0xB2;
 #define PLM_START_IS_SLICE(c) \
 	(c >= PLM_START_SLICE_FIRST && c <= PLM_START_SLICE_LAST)
 
-static const float PLM_VIDEO_PIXEL_ASPECT_RATIO[] = {
+static const __not_in_flash("plm_tables") float PLM_VIDEO_PIXEL_ASPECT_RATIO[] = {
 	1.0000, /* square pixels */
 	0.6735, /* 3:4? */
 	0.7031, /* MPEG-1 / MPEG-2 video encoding divergence? */
@@ -2346,12 +2346,12 @@ static const float PLM_VIDEO_PIXEL_ASPECT_RATIO[] = {
 	1.0255, 1.0695, 1.0950, 1.1575, 1.2051,
 };
 
-static const float PLM_VIDEO_PICTURE_RATE[] = {
+static const __not_in_flash("plm_tables") float PLM_VIDEO_PICTURE_RATE[] = {
 	0.000, 23.976, 24.000, 25.000, 29.970, 30.000, 50.000, 59.940,
 	60.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000
 };
 
-static const uint8_t PLM_VIDEO_ZIG_ZAG[] = {
+static const __not_in_flash("plm_tables") uint8_t PLM_VIDEO_ZIG_ZAG[] = {
 	 0,  1,  8, 16,  9,  2,  3, 10,
 	17, 24, 32, 25, 18, 11,  4,  5,
 	12, 19, 26, 33, 40, 48, 41, 34,
@@ -2362,7 +2362,7 @@ static const uint8_t PLM_VIDEO_ZIG_ZAG[] = {
 	53, 60, 61, 54, 47, 55, 62, 63
 };
 
-static const uint8_t PLM_VIDEO_INTRA_QUANT_MATRIX[] = {
+static const __not_in_flash("plm_tables") uint8_t PLM_VIDEO_INTRA_QUANT_MATRIX[] = {
 	 8, 16, 19, 22, 26, 27, 29, 34,
 	16, 16, 22, 24, 27, 29, 34, 37,
 	19, 22, 26, 27, 29, 34, 34, 38,
@@ -2373,7 +2373,7 @@ static const uint8_t PLM_VIDEO_INTRA_QUANT_MATRIX[] = {
 	27, 29, 35, 38, 46, 56, 69, 83
 };
 
-static const uint8_t PLM_VIDEO_NON_INTRA_QUANT_MATRIX[] = {
+static const __not_in_flash("plm_tables") uint8_t PLM_VIDEO_NON_INTRA_QUANT_MATRIX[] = {
 	16, 16, 16, 16, 16, 16, 16, 16,
 	16, 16, 16, 16, 16, 16, 16, 16,
 	16, 16, 16, 16, 16, 16, 16, 16,
@@ -2384,7 +2384,7 @@ static const uint8_t PLM_VIDEO_NON_INTRA_QUANT_MATRIX[] = {
 	16, 16, 16, 16, 16, 16, 16, 16
 };
 
-static const uint8_t PLM_VIDEO_PREMULTIPLIER_MATRIX[] = {
+static const __not_in_flash("plm_tables") uint8_t PLM_VIDEO_PREMULTIPLIER_MATRIX[] = {
 	32, 44, 42, 38, 32, 25, 17,  9,
 	44, 62, 58, 52, 44, 35, 24, 12,
 	42, 58, 55, 49, 42, 33, 23, 12,
@@ -2395,7 +2395,7 @@ static const uint8_t PLM_VIDEO_PREMULTIPLIER_MATRIX[] = {
 	 9, 12, 12, 10,  9,  7,  5,  2
 };
 
-static const plm_vlc_t PLM_VIDEO_MACROBLOCK_ADDRESS_INCREMENT[] = {
+static const __not_in_flash("plm_tables") plm_vlc_t PLM_VIDEO_MACROBLOCK_ADDRESS_INCREMENT[] = {
 	{  1 << 1,    0}, {       0,    1},  //   0: x
 	{  2 << 1,    0}, {  3 << 1,    0},  //   1: 0x
 	{  4 << 1,    0}, {  5 << 1,    0},  //   2: 00x
@@ -2438,12 +2438,12 @@ static const plm_vlc_t PLM_VIDEO_MACROBLOCK_ADDRESS_INCREMENT[] = {
 	{       0,   23}, {       0,   22},  //  39: 0000 0100 01x
 };
 
-static const plm_vlc_t PLM_VIDEO_MACROBLOCK_TYPE_INTRA[] = {
+static const __not_in_flash("plm_tables") plm_vlc_t PLM_VIDEO_MACROBLOCK_TYPE_INTRA[] = {
 	{  1 << 1,    0}, {       0,  0x01},  //   0: x
 	{      -1,    0}, {       0,  0x11},  //   1: 0x
 };
 
-static const plm_vlc_t PLM_VIDEO_MACROBLOCK_TYPE_PREDICTIVE[] = {
+static const __not_in_flash("plm_tables") plm_vlc_t PLM_VIDEO_MACROBLOCK_TYPE_PREDICTIVE[] = {
 	{  1 << 1,    0}, {       0, 0x0a},  //   0: x
 	{  2 << 1,    0}, {       0, 0x02},  //   1: 0x
 	{  3 << 1,    0}, {       0, 0x08},  //   2: 00x
@@ -2453,7 +2453,7 @@ static const plm_vlc_t PLM_VIDEO_MACROBLOCK_TYPE_PREDICTIVE[] = {
 	{      -1,    0}, {       0, 0x11},  //   6: 0000 0x
 };
 
-static const plm_vlc_t PLM_VIDEO_MACROBLOCK_TYPE_B[] = {
+static const __not_in_flash("plm_tables") plm_vlc_t PLM_VIDEO_MACROBLOCK_TYPE_B[] = {
 	{  1 << 1,    0}, {  2 << 1,    0},  //   0: x
 	{  3 << 1,    0}, {  4 << 1,    0},  //   1: 0x
 	{       0, 0x0c}, {       0, 0x0e},  //   2: 1x
@@ -2474,7 +2474,7 @@ static const plm_vlc_t *PLM_VIDEO_MACROBLOCK_TYPE[] = {
 	PLM_VIDEO_MACROBLOCK_TYPE_B
 };
 
-static const plm_vlc_t PLM_VIDEO_CODE_BLOCK_PATTERN[] = {
+static const __not_in_flash("plm_tables") plm_vlc_t PLM_VIDEO_CODE_BLOCK_PATTERN[] = {
 	{  1 << 1,    0}, {  2 << 1,    0},  //   0: x
 	{  3 << 1,    0}, {  4 << 1,    0},  //   1: 0x
 	{  5 << 1,    0}, {  6 << 1,    0},  //   2: 1x
@@ -2540,7 +2540,7 @@ static const plm_vlc_t PLM_VIDEO_CODE_BLOCK_PATTERN[] = {
 	{       0,   47}, {       0,   31},  //  62: 0000 0011x
 };
 
-static const plm_vlc_t PLM_VIDEO_MOTION[] = {
+static const __not_in_flash("plm_tables") plm_vlc_t PLM_VIDEO_MOTION[] = {
 	{  1 << 1,    0}, {       0,    0},  //   0: x
 	{  2 << 1,    0}, {  3 << 1,    0},  //   1: 0x
 	{  4 << 1,    0}, {  5 << 1,    0},  //   2: 00x
@@ -2577,7 +2577,7 @@ static const plm_vlc_t PLM_VIDEO_MOTION[] = {
 	{       0,   11}, {       0,  -11},  //  33: 0000 0100 01x
 };
 
-static const plm_vlc_t PLM_VIDEO_DCT_SIZE_LUMINANCE[] = {
+static const __not_in_flash("plm_tables") plm_vlc_t PLM_VIDEO_DCT_SIZE_LUMINANCE[] = {
 	{  1 << 1,    0}, {  2 << 1,    0},  //   0: x
 	{       0,    1}, {       0,    2},  //   1: 0x
 	{  3 << 1,    0}, {  4 << 1,    0},  //   2: 1x
@@ -2589,7 +2589,7 @@ static const plm_vlc_t PLM_VIDEO_DCT_SIZE_LUMINANCE[] = {
 	{       0,    8}, {      -1,    0},  //   8: 1111 11x
 };
 
-static const plm_vlc_t PLM_VIDEO_DCT_SIZE_CHROMINANCE[] = {
+static const __not_in_flash("plm_tables") plm_vlc_t PLM_VIDEO_DCT_SIZE_CHROMINANCE[] = {
 	{  1 << 1,    0}, {  2 << 1,    0},  //   0: x
 	{       0,    0}, {       0,    1},  //   1: 0x
 	{       0,    2}, {  3 << 1,    0},  //   2: 1x
@@ -2614,7 +2614,7 @@ static const plm_vlc_t *PLM_VIDEO_DCT_SIZE[] = {
 
 //  Decoded values are unsigned. Sign bit follows in the stream.
 
-static const plm_vlc_uint_t PLM_VIDEO_DCT_COEFF[] = {
+static const __not_in_flash("plm_tables") plm_vlc_uint_t PLM_VIDEO_DCT_COEFF[] = {
 	{  1 << 1,        0}, {       0,   0x0001},  //   0: x
 	{  2 << 1,        0}, {  3 << 1,        0},  //   1: 0x
 	{  4 << 1,        0}, {  5 << 1,        0},  //   2: 00x
@@ -3753,16 +3753,16 @@ static const unsigned short PLM_AUDIO_SAMPLE_RATE[] = {
 	22050, 24000, 16000, 0  // MPEG-2
 };
 
-static const short PLM_AUDIO_BIT_RATE[] = {
+static const __not_in_flash("plm_tables") short PLM_AUDIO_BIT_RATE[] = {
 	32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, // MPEG-1
 	 8, 16, 24, 32, 40, 48,  56,  64,  80,  96, 112, 128, 144, 160  // MPEG-2
 };
 
-static const int PLM_AUDIO_SCALEFACTOR_BASE[] = {
+static const __not_in_flash("plm_tables") int PLM_AUDIO_SCALEFACTOR_BASE[] = {
 	0x02000000, 0x01965FEA, 0x01428A30
 };
 
-static const float PLM_AUDIO_SYNTHESIS_WINDOW[] = {
+static const __not_in_flash("plm_tables") float PLM_AUDIO_SYNTHESIS_WINDOW[] = {
 	     0.0,     -0.5,     -0.5,     -0.5,     -0.5,     -0.5,
 	    -0.5,     -1.0,     -1.0,     -1.0,     -1.0,     -1.5,
 	    -1.5,     -2.0,     -2.0,     -2.5,     -2.5,     -3.0,
@@ -3852,7 +3852,7 @@ static const float PLM_AUDIO_SYNTHESIS_WINDOW[] = {
 };
 
 // Quantizer lookup, step 1: bitrate classes
-static const uint8_t PLM_AUDIO_QUANT_LUT_STEP_1[2][16] = {
+static const __not_in_flash("plm_tables") uint8_t PLM_AUDIO_QUANT_LUT_STEP_1[2][16] = {
 	// 32, 48, 56, 64, 80, 96,112,128,160,192,224,256,320,384 <- bitrate
 	{ 0,  0,  1,  1,  1,  2,  2,  2,  2,  2,  2,  2,  2,  2 }, // mono
 	// 16, 24, 28, 32, 40, 48, 56, 64, 80, 96,112,128,160,192 <- bitrate / chan
@@ -3865,7 +3865,7 @@ static const uint8_t PLM_AUDIO_QUANT_LUT_STEP_1[2][16] = {
 #define PLM_AUDIO_QUANT_TAB_C 8           // Table 3-B.2c:  low-rate, sblimit =  8
 #define PLM_AUDIO_QUANT_TAB_D 12          // Table 3-B.2d:  low-rate, sblimit = 12
 
-static const uint8_t QUANT_LUT_STEP_2[3][3] = {
+static const __not_in_flash("plm_tables") uint8_t QUANT_LUT_STEP_2[3][3] = {
 	//44.1 kHz,              48 kHz,                32 kHz
 	{ PLM_AUDIO_QUANT_TAB_C, PLM_AUDIO_QUANT_TAB_C, PLM_AUDIO_QUANT_TAB_D }, // 32 - 48 kbit/sec/ch
 	{ PLM_AUDIO_QUANT_TAB_A, PLM_AUDIO_QUANT_TAB_A, PLM_AUDIO_QUANT_TAB_A }, // 56 - 80 kbit/sec/ch
@@ -3874,7 +3874,7 @@ static const uint8_t QUANT_LUT_STEP_2[3][3] = {
 
 // Quantizer lookup, step 3: B2 table, subband -> nbal, row index
 // (upper 4 bits: nbal, lower 4 bits: row index)
-static const uint8_t PLM_AUDIO_QUANT_LUT_STEP_3[3][32] = {
+static const __not_in_flash("plm_tables") uint8_t PLM_AUDIO_QUANT_LUT_STEP_3[3][32] = {
 	// Low-rate table (3-B.2c and 3-B.2d)
 	{
 		0x44,0x44,
@@ -3897,7 +3897,7 @@ static const uint8_t PLM_AUDIO_QUANT_LUT_STEP_3[3][32] = {
 };
 
 // Quantizer lookup, step 4: table row, allocation[] value -> quant table index
-static const uint8_t PLM_AUDIO_QUANT_LUT_STEP_4[6][16] = {
+static const __not_in_flash("plm_tables") uint8_t PLM_AUDIO_QUANT_LUT_STEP_4[6][16] = {
 	{ 0, 1, 2, 17 },
 	{ 0, 1, 2,  3, 4, 5, 6, 17 },
 	{ 0, 1, 2,  3, 4, 5, 6,  7,  8,  9, 10, 11, 12, 13, 14, 17 },
@@ -3912,7 +3912,7 @@ typedef struct plm_quantizer_spec_t {
 	unsigned char bits;
 } plm_quantizer_spec_t;
 
-static const plm_quantizer_spec_t PLM_AUDIO_QUANT_TAB[] = {
+static const __not_in_flash("plm_tables") plm_quantizer_spec_t PLM_AUDIO_QUANT_TAB[] = {
 	{     3, 1,  5 },  //  1
 	{     5, 1,  7 },  //  2
 	{     7, 0,  3 },  //  3

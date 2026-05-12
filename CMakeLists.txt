@@ -109,6 +109,13 @@ if(AUTOPLAY_FIRST)
     endif()
 endif()
 
+# Profiling-only: -DNO_AUDIO=ON disables audio decode/output to isolate
+# the video-decode cost from audio synthesis cost.
+option(NO_AUDIO "Disable audio (profiling only)" OFF)
+if(NO_AUDIO)
+    target_compile_definitions(frank-video PRIVATE NO_AUDIO=1)
+endif()
+
 # SD card pin macros based on board variant.
 if(BOARD_VARIANT STREQUAL "M1")
     target_compile_definitions(frank-video PRIVATE
