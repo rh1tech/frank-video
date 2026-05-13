@@ -230,6 +230,14 @@ void i2s_audio_init(uint data_pin, uint clock_pin_base, uint32_t sample_rate) {
     bufs_free_mask = (1u << DMA_BUFFER_COUNT) - 1u;
     i2s_running = false;
 
+    /* Reset streaming-mode state. Without this the second time we init
+     * the driver (e.g. after returning to the file browser and starting
+     * a new clip), stream_mode would still be true from the previous
+     * playback and i2s_audio_stream_push would skip the DMA start path,
+     * leaving DMA disarmed -> silent playback. */
+    stream_mode = false;
+    ring_w = ring_r = 0;
+
     printf("I2S: ready (double-buffer DMA, %lu frames/buf)\n", (unsigned long)dma_xfer_count);
 }
 
@@ -491,6 +499,15 @@ void i2s_audio_shutdown(void) {
 
     bufs_free_mask = (1u << DMA_BUFFER_COUNT) - 1u;
     preroll_count = 0;
+
+    /* Streaming-mode state must reset alongside the DMA state -- otherwise
+     * the next i2s_audio_init() leaves stream_mode=true from this run,
+     * i2s_audio_stream_push() skips the DMA-start path, and audio is
+     * silent on the next playback. (init also resets these for belt and
+     * suspenders, but doing it here keeps the driver in a consistent
+     * post-shutdown state regardless of the caller.) */
+    stream_mode = false;
+    ring_w = ring_r = 0;
 
     /* Release PIO program + SM so the driver can re-init on different pins
      * (e.g. switching between onboard I2S and an external DAC at runtime). */

@@ -102,11 +102,20 @@ target_compile_definitions(frank-video PRIVATE
 # specific clip; the matcher is case-insensitive.
 option(AUTOPLAY_FIRST "Skip file browser and auto-play the first MPG" OFF)
 set(AUTOPLAY_TARGET "" CACHE STRING "When AUTOPLAY_FIRST is ON, prefer this filename")
+set(AUTOPLAY_MAX_SECS "0" CACHE STRING "When >0, force the player to stop after N seconds (profiling)")
 if(AUTOPLAY_FIRST)
     target_compile_definitions(frank-video PRIVATE AUTOPLAY_FIRST=1)
     if(NOT AUTOPLAY_TARGET STREQUAL "")
         target_compile_definitions(frank-video PRIVATE AUTOPLAY_TARGET="${AUTOPLAY_TARGET}")
     endif()
+    if(NOT AUTOPLAY_MAX_SECS STREQUAL "0")
+        target_compile_definitions(frank-video PRIVATE AUTOPLAY_MAX_SECS=${AUTOPLAY_MAX_SECS})
+    endif()
+endif()
+
+set(AUTOPLAY_ALTERNATE "" CACHE STRING "When AUTOPLAY_FIRST is ON, alternate with this filename each loop")
+if(AUTOPLAY_FIRST AND NOT AUTOPLAY_ALTERNATE STREQUAL "")
+    target_compile_definitions(frank-video PRIVATE AUTOPLAY_ALTERNATE="${AUTOPLAY_ALTERNATE}")
 endif()
 
 # Profiling-only: -DNO_AUDIO=ON disables audio decode/output to isolate

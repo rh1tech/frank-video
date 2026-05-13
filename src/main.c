@@ -235,10 +235,29 @@ int main(void) {
         }
         snprintf(path, sizeof(path), "%s", chosen);
         printf("AUTOPLAY: %s\n", path);
-        while (true) {
+
+#ifdef AUTOPLAY_ALTERNATE
+        /* Profiling-only: alternate between two clips on each loop so we
+         * exercise the full close-then-open path with different sample
+         * rates each time. Set AUTOPLAY_ALTERNATE=NAME.MPG to alternate
+         * with that file (in /video/). */
+        char other_path[FB_PATH_MAX];
+        snprintf(other_path, sizeof(other_path), "/video/%s", AUTOPLAY_ALTERNATE);
+        printf("AUTOPLAY: alternating with %s\n", other_path);
+        unsigned int loop_idx = 0;
+        for (;;) {
+            const char *p = (loop_idx & 1u) ? other_path : path;
+            printf("AUTOPLAY: cycle %u -> %s\n", loop_idx, p);
+            player_play(p);
+            printf("AUTOPLAY: looped\n");
+            loop_idx++;
+        }
+#else
+        for (;;) {
             player_play(path);
             printf("AUTOPLAY: looped\n");
         }
+#endif
     }
 #endif
 

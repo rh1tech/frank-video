@@ -522,6 +522,17 @@ void player_play(const char *path) {
         uint32_t now = to_ms_since_boot(get_absolute_time());
         last_tick = now;
 
+#ifdef AUTOPLAY_MAX_SECS
+        /* Profiling-only: force the player to exit after AUTOPLAY_MAX_SECS
+         * of playback so the autoplay loop exercises the close-then-open
+         * path repeatedly. Lets us reproduce restart-audio bugs without a
+         * keyboard. */
+        if ((now - playback_start_ms) > (AUTOPLAY_MAX_SECS * 1000u)) {
+            G.closing = true;
+            break;
+        }
+#endif
+
         /* Custom decode loop, paced by wall clock. pl_mpeg's plm_decode()
          * interleaves video and audio decode in a tight do-while; on hard
          * B-frame scenes that bursts many audio frames back-to-back since
