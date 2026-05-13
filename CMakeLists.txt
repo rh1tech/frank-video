@@ -45,36 +45,123 @@ add_subdirectory(src/fatfs)
 add_subdirectory(drivers/sdcard)
 add_subdirectory(drivers/ps2kbd)
 
-# Drivers static lib: HDMI + PSRAM (no PIO header generation needed here).
-add_library(drivers STATIC
-    drivers/HDMI.c
-    drivers/psram_init.c
-    drivers/psram_allocator.c
-)
-target_include_directories(drivers PUBLIC drivers)
-target_compile_definitions(drivers PRIVATE
-    BOARD_${BOARD_VARIANT}
-    PSRAM_MAX_FREQ_MHZ=${PSRAM_SPEED}
-)
-target_compile_options(drivers PRIVATE -Ofast)
-target_link_libraries(drivers PUBLIC
-    pico_stdlib hardware_dma hardware_pio hardware_spi hardware_clocks
-    hardware_irq hardware_sync
-)
+# --- Video output selection ------------------------------------------------
+#
+# HDMI_HSTX=ON   -> RP2350 native HSTX driver (DMA-fed scanline + HDMI audio
+#                   over Data Islands). Requires GPIO 12-19 for the TMDS
+#                   lanes, so M1 (HDMI base 6) is not supported.
+# default        -> legacy PIO HDMI driver (drivers/HDMI.c) + I2S audio.
+option(HDMI_HSTX "Use RP2350 HSTX HDMI driver with HDMI audio" OFF)
+
+if(HDMI_HSTX AND NOT BOARD_VARIANT STREQUAL "M2")
+    message(FATAL_ERROR
+        "HDMI_HSTX requires BOARD_VARIANT=M2 (HSTX uses GPIO 12-19); "
+        "BOARD_VARIANT=${BOARD_VARIANT} has its HDMI base on a non-HSTX pin set.")
+endif()
+
+if(HDMI_HSTX)
+    # HSTX needs an integer divisor from clk_sys to its 126 MHz pixel domain.
+    # 504 / 4 = 126, 252 / 2 = 126. CMake passes the active CPU clock in
+    # CPU_SPEED so we pick MODE_HSTX_CLK_DIV accordingly.
+    if(CPU_SPEED EQUAL 504)
+        set(HSTX_CLK_DIV 4)
+    elseif(CPU_SPEED EQUAL 378)
+        set(HSTX_CLK_DIV 3)
+    elseif(CPU_SPEED EQUAL 252)
+        set(HSTX_CLK_DIV 2)
+    elseif(CPU_SPEED EQUAL 126)
+        set(HSTX_CLK_DIV 1)
+    else()
+        message(FATAL_ERROR
+            "HDMI_HSTX needs CPU_SPEED such that CPU_SPEED/N == 126 MHz "
+            "(126/252/378/504); got ${CPU_SPEED}.")
+    endif()
+    message(STATUS "HDMI_HSTX: clk_sys=${CPU_SPEED} MHz, MODE_HSTX_CLK_DIV=${HSTX_CLK_DIV}")
+endif()
+
+# Drivers static lib: HDMI (PIO or HSTX) + PSRAM.
+if(HDMI_HSTX)
+    add_library(drivers STATIC
+        drivers/hdmi_hstx/HDMI_hstx.c
+        drivers/hdmi_hstx/HDMI_hstx_audio.c
+        drivers/hdmi_hstx/video_output.c
+        drivers/hdmi_hstx/hstx_packet.c
+        drivers/hdmi_hstx/hstx_data_island_queue.c
+        drivers/psram_init.c
+        drivers/psram_allocator.c
+    )
+    target_include_directories(drivers PUBLIC
+        drivers
+        drivers/hdmi_hstx
+        drivers/i2s    # for i2s_audio.h header (signature compat shim)
+    )
+    # 640x480 @ 60Hz (HDMI VIC=1) is the most compatible mode -- TVs and
+    # capture cards accept it without any quirky-mode handshaking. The
+    # 320x240 framebuffer is line-doubled inside the scanline callback so
+    # each source pixel fills a 2x2 dst block.
+    target_compile_definitions(drivers PUBLIC
+        HDMI_HSTX=1
+        MODE_HSTX_CLK_DIV=${HSTX_CLK_DIV}
+    )
+    # M2 PCB layout has CLK- on GPIO12, CLK+ on GPIO13 etc (N on even, P on
+    # odd). The HSTX driver's default branch maps that exact polarity, so
+    # HSTX_INVERT_DIFFPAIRS stays *unset* -- enabling it would invert every
+    # lane and break the signal. (murmnes' M2 build also leaves it unset.)
+    option(HDMI_HSTX_INVERT_DIFFPAIRS "Swap P/N polarity on every HSTX diff pair" OFF)
+    if(HDMI_HSTX_INVERT_DIFFPAIRS)
+        target_compile_definitions(drivers PUBLIC HSTX_INVERT_DIFFPAIRS=1)
+    endif()
+    target_compile_definitions(drivers PRIVATE
+        BOARD_${BOARD_VARIANT}
+        PSRAM_MAX_FREQ_MHZ=${PSRAM_SPEED}
+    )
+    target_compile_options(drivers PRIVATE -Ofast)
+    target_link_libraries(drivers PUBLIC
+        pico_stdlib pico_multicore
+        hardware_dma hardware_pio hardware_spi hardware_clocks
+        hardware_irq hardware_sync hardware_gpio
+    )
+else()
+    add_library(drivers STATIC
+        drivers/HDMI.c
+        drivers/psram_init.c
+        drivers/psram_allocator.c
+    )
+    target_include_directories(drivers PUBLIC drivers)
+    target_compile_definitions(drivers PRIVATE
+        BOARD_${BOARD_VARIANT}
+        PSRAM_MAX_FREQ_MHZ=${PSRAM_SPEED}
+    )
+    target_compile_options(drivers PRIVATE -Ofast)
+    target_link_libraries(drivers PUBLIC
+        pico_stdlib hardware_dma hardware_pio hardware_spi hardware_clocks
+        hardware_irq hardware_sync
+    )
+endif()
 
 # --- Main executable --------------------------------------------------------
-add_executable(frank-video
-    src/main.c
-    src/file_browser.c
-    src/player.c
-    drivers/i2s/i2s_audio.c
-)
+if(HDMI_HSTX)
+    # HDMI audio path uses HDMI_hstx_audio.c (compiled into drivers); no
+    # I2S source file needed in the executable.
+    add_executable(frank-video
+        src/main.c
+        src/file_browser.c
+        src/player.c
+    )
+else()
+    add_executable(frank-video
+        src/main.c
+        src/file_browser.c
+        src/player.c
+        drivers/i2s/i2s_audio.c
+    )
 
-# Generate the I2S PIO header against the executable so the audio_i2s.pio.h
-# include resolves at compile time.
-pico_generate_pio_header(frank-video
-    ${CMAKE_CURRENT_LIST_DIR}/drivers/i2s/audio_i2s.pio
-)
+    # Generate the I2S PIO header against the executable so the
+    # audio_i2s.pio.h include resolves at compile time.
+    pico_generate_pio_header(frank-video
+        ${CMAKE_CURRENT_LIST_DIR}/drivers/i2s/audio_i2s.pio
+    )
+endif()
 
 target_include_directories(frank-video PRIVATE
     src
@@ -83,6 +170,9 @@ target_include_directories(frank-video PRIVATE
     drivers/sdcard
     drivers/ps2kbd
 )
+if(HDMI_HSTX)
+    target_include_directories(frank-video PRIVATE drivers/hdmi_hstx)
+endif()
 
 target_compile_options(frank-video PRIVATE -Ofast)
 

@@ -17,6 +17,9 @@
 #include "psram_allocator.h"
 #include "ps2kbd_wrapper.h"
 #include "ff.h"
+#ifdef HDMI_HSTX
+#include "hstx_data_island_queue.h"
+#endif
 
 #include "pico/stdlib.h"
 
@@ -712,9 +715,14 @@ void player_play(const char *path) {
             uint32_t debt_now = G.time_debt;
 
             uint32_t a_drop = G.prof_audio_dropped;
+#ifdef HDMI_HSTX
+            uint32_t audio_underruns = hstx_di_queue_get_underrun_count();
+#else
+            uint32_t audio_underruns = 0;
+#endif
             printf("[prof] win=%lums dec=%lu rnd=%lu skp=%lu "
                    "render_avg=%luus audio_avg=%luus(%lu) "
-                   "decode_avg=%luus cpu=%lu%% debt=%lums adrop=%lu\n",
+                   "decode_avg=%luus cpu=%lu%% debt=%lums adrop=%lu aundr=%lu\n",
                    (unsigned long)window_ms,
                    (unsigned long)dec, (unsigned long)rnd, (unsigned long)skp,
                    (unsigned long)avg_render_us,
@@ -722,7 +730,8 @@ void player_play(const char *path) {
                    (unsigned long)avg_dec_us,
                    (unsigned long)cpu_pct,
                    (unsigned long)debt_now,
-                   (unsigned long)a_drop);
+                   (unsigned long)a_drop,
+                   (unsigned long)audio_underruns);
             G.prof_audio_dropped = 0;
 
             G.prof_frames_decoded = 0;
