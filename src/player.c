@@ -25,6 +25,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 #define PLM_NO_STDIO
 /* 256 KB ring buffer is plenty for streaming; halving it from rhea's 512 KB
@@ -132,25 +133,63 @@ static uint8_t *fb_get(void) { return g_fb_back; }
 
 /* ===== RGB332 palette =================================================== */
 
-/* 6x6x6 colour cube + 40-step grayscale ramp (216-255). */
+/* sRGB-to-linear gamma applied to 6 levels per channel.
+ *
+ * The dither maths runs in linear "level" space (0..5 per channel), but
+ * the panel and the human eye expect sRGB-encoded output. If we just
+ * write level*51 directly, the perceived steps are uneven: the gap
+ * between level 0 and level 1 looks ~5x larger than between level 4 and
+ * level 5, so dark gradients band visibly even with dithering.
+ *
+ * Pre-baking the sRGB transfer curve into the palette makes the visible
+ * steps approximately equal-luminance, so dither noise averages to the
+ * intended midtone instead of crushing into the nearest dark/light
+ * level. Values come from sRGB encoding of (i / 5)^(1/2.2) -- close
+ * enough to the real piecewise sRGB curve at 6 levels. */
+static const uint8_t kSRGB6[6] = {
+    /* linear 0/5, 1/5, 2/5, 3/5, 4/5, 5/5 -> 8-bit sRGB */
+    0x00, 0x67, 0x90, 0xB1, 0xCE, 0xEA
+};
+
+/* 6x6x6 gamma-correct colour cube + 40-step grayscale ramp (216-255). */
 static void setup_palette(void) {
     for (int r = 0; r < 6; r++)
         for (int g = 0; g < 6; g++)
             for (int b = 0; b < 6; b++) {
                 int idx = r * 36 + g * 6 + b;
-                uint32_t rgb = ((uint32_t)(r * 51) << 16)
-                             | ((uint32_t)(g * 51) << 8)
-                             |  (uint32_t)(b * 51);
+                uint32_t rgb = ((uint32_t)kSRGB6[r] << 16)
+                             | ((uint32_t)kSRGB6[g] << 8)
+                             |  (uint32_t)kSRGB6[b];
                 graphics_set_palette((uint8_t)idx, rgb);
             }
+    /* Greyscale ramp uses the same sRGB curve so the dark steps don't
+     * crush either. The dither path doesn't index this region but it's
+     * what the file browser uses, and it keeps a smooth fade-to-black. */
     for (int i = 0; i < 40; i++) {
-        uint8_t v = (uint8_t)(i * 255 / 39);
+        /* sRGB-encode (i / 39) at gamma 2.2 */
+        float lin = (float)i / 39.0f;
+        float enc = (lin <= 0.0f) ? 0.0f
+                  : (lin >= 1.0f) ? 1.0f
+                  : powf(lin, 1.0f / 2.2f);
+        uint8_t v = (uint8_t)(enc * 255.0f + 0.5f);
         uint32_t rgb = ((uint32_t)v << 16) | ((uint32_t)v << 8) | v;
         graphics_set_palette((uint8_t)(216 + i), rgb);
     }
 }
 
 /* ===== YCbCr -> RGB332 dither tables ===================================== */
+
+/* Classic 4x4 Bayer ordered-dither matrix, 0..15. Compared to the 2x2
+ * matrix the previous renderer used (4 thresholds), this gives 16
+ * thresholds spread evenly between palette steps -- enough to break
+ * the visible banding on slow gradients (sky, skin) without resorting
+ * to error diffusion (which would serialise the inner loop). */
+static const uint8_t kBayer4x4[16] = {
+     0,  8,  2, 10,
+    12,  4, 14,  6,
+     3, 11,  1,  9,
+    15,  7, 13,  5
+};
 
 static void init_tables(void) {
     G.y_tab = (uint8_t *)malloc(256);
@@ -160,11 +199,17 @@ static void init_tables(void) {
         G.y_tab[i] = (uint8_t)v;
     }
 
-    /* 2x2 Bayer thresholds = step x {0, 0.5, 0.75, 0.25} = {0, 25, 38, 13} */
-    int th[4] = {0, 25, 38, 13};
-
-    G.dt = (uint8_t *)malloc(12 * DT_SZ);
-    for (int p = 0; p < 4; p++) {
+    /* 16 Bayer positions x {R, G, B} = 48 dither tables of 1024 bytes
+     * each = 48 KB SRAM. Each table maps a (signed-biased) Y+chroma
+     * delta to a pre-quantised palette component, so the inner render
+     * loop is three loads + two adds per pixel regardless of the
+     * Bayer-matrix size. The threshold for cell p is
+     *     (kBayer4x4[p] + 0.5) / 16  *  step
+     * where step = 255 / 5 = 51 (the gap between adjacent palette
+     * levels per channel). */
+    G.dt = (uint8_t *)malloc(48 * DT_SZ);
+    for (int p = 0; p < 16; p++) {
+        int th = (kBayer4x4[p] * 2 + 1) * 51 / 32;  /* (b+0.5)/16 * 51 */
         uint8_t *dr = G.dt + (p * 3 + 0) * DT_SZ;
         uint8_t *dg = G.dt + (p * 3 + 1) * DT_SZ;
         uint8_t *db = G.dt + (p * 3 + 2) * DT_SZ;
@@ -172,17 +217,21 @@ static void init_tables(void) {
             int v = i - DT_BIAS;
             if (v < 0) v = 0; if (v > 255) v = 255;
 
-            int rv = (v + th[p]) * 5 / 255; if (rv > 5) rv = 5;
-            int gv = (v + th[p]) * 5 / 255; if (gv > 5) gv = 5;
-            int bv = (v + th[p]) * 5 / 255; if (bv > 5) bv = 5;
-            dr[i] = (uint8_t)(rv * 36);
-            dg[i] = (uint8_t)(gv * 6);
-            db[i] = (uint8_t)(bv);
+            int q = (v + th) * 5 / 255;
+            if (q > 5) q = 5;
+            dr[i] = (uint8_t)(q * 36);
+            dg[i] = (uint8_t)(q * 6);
+            db[i] = (uint8_t)(q);
         }
     }
 }
 
 /* ===== Renderers (kept identical to rhea's videoplayer) ================= */
+
+/* Look up the (R,G,B) dither tables for Bayer position p (0..15). */
+#define DT_R(p) (G.dt + ((p) * 3 + 0) * DT_SZ + DT_BIAS)
+#define DT_G(p) (G.dt + ((p) * 3 + 1) * DT_SZ + DT_BIAS)
+#define DT_B(p) (G.dt + ((p) * 3 + 2) * DT_SZ + DT_BIAS)
 
 static void __no_inline_not_in_flash_func(render_1x_rows)(uint8_t *fb, plm_frame_t *frame,
                            int row_start, int row_end) {
@@ -195,19 +244,6 @@ static void __no_inline_not_in_flash_func(render_1x_rows)(uint8_t *fb, plm_frame
 
     if (cols > 160) cols = 160;
 
-    const uint8_t *r0 = G.dt +  0*DT_SZ + DT_BIAS;
-    const uint8_t *g0 = G.dt +  1*DT_SZ + DT_BIAS;
-    const uint8_t *b0 = G.dt +  2*DT_SZ + DT_BIAS;
-    const uint8_t *r1 = G.dt +  3*DT_SZ + DT_BIAS;
-    const uint8_t *g1 = G.dt +  4*DT_SZ + DT_BIAS;
-    const uint8_t *b1 = G.dt +  5*DT_SZ + DT_BIAS;
-    const uint8_t *r2 = G.dt +  6*DT_SZ + DT_BIAS;
-    const uint8_t *g2 = G.dt +  7*DT_SZ + DT_BIAS;
-    const uint8_t *b2 = G.dt +  8*DT_SZ + DT_BIAS;
-    const uint8_t *r3 = G.dt +  9*DT_SZ + DT_BIAS;
-    const uint8_t *g3 = G.dt + 10*DT_SZ + DT_BIAS;
-    const uint8_t *b3 = G.dt + 11*DT_SZ + DT_BIAS;
-
     uint8_t yl0[LINE_BUF_W], yl1[LINE_BUF_W];
     uint8_t cbl[LINE_BUF_W/2], crl[LINE_BUF_W/2];
 
@@ -217,10 +253,31 @@ static void __no_inline_not_in_flash_func(render_1x_rows)(uint8_t *fb, plm_frame
         memcpy(cbl, frame->cb.data + row*cw,        cols);
         memcpy(crl, frame->cr.data + row*cw,        cols);
 
-        int di = (oy + row*2) * DISPLAY_W + ox;
+        int dest_y_top = (oy + row*2);
+        int dest_y_bot = dest_y_top + 1;
+        int by_top = dest_y_top & 3;
+        int by_bot = dest_y_bot & 3;
+
+        int di = dest_y_top * DISPLAY_W + ox;
         int yi = 0;
 
         for (int col = 0; col < cols; col++) {
+            int dest_x_l = (ox + col*2);
+            int dest_x_r = dest_x_l + 1;
+            int bx_l = dest_x_l & 3;
+            int bx_r = dest_x_r & 3;
+
+            /* Pick the four Bayer positions for this 2x2 dest block. */
+            int p_tl = by_top * 4 + bx_l;
+            int p_tr = by_top * 4 + bx_r;
+            int p_bl = by_bot * 4 + bx_l;
+            int p_br = by_bot * 4 + bx_r;
+
+            const uint8_t *rTL = DT_R(p_tl), *gTL = DT_G(p_tl), *bTL = DT_B(p_tl);
+            const uint8_t *rTR = DT_R(p_tr), *gTR = DT_G(p_tr), *bTR = DT_B(p_tr);
+            const uint8_t *rBL = DT_R(p_bl), *gBL = DT_G(p_bl), *bBL = DT_B(p_bl);
+            const uint8_t *rBR = DT_R(p_br), *gBR = DT_G(p_br), *bBR = DT_B(p_br);
+
             int cr = crl[col] - 128;
             int cb = cbl[col] - 128;
             int rd = (cr * 104597) >> 16;
@@ -229,13 +286,13 @@ static void __no_inline_not_in_flash_func(render_1x_rows)(uint8_t *fb, plm_frame
             int yy;
 
             yy = ytab[yl0[yi]];
-            fb[di]     = r0[yy+rd] + g0[yy-gd] + b0[yy+bd];
+            fb[di]     = rTL[yy+rd] + gTL[yy-gd] + bTL[yy+bd];
             yy = ytab[yl0[yi+1]];
-            fb[di+1]   = r1[yy+rd] + g1[yy-gd] + b1[yy+bd];
+            fb[di+1]   = rTR[yy+rd] + gTR[yy-gd] + bTR[yy+bd];
             yy = ytab[yl1[yi]];
-            fb[di+DISPLAY_W]   = r2[yy+rd] + g2[yy-gd] + b2[yy+bd];
+            fb[di+DISPLAY_W]   = rBL[yy+rd] + gBL[yy-gd] + bBL[yy+bd];
             yy = ytab[yl1[yi+1]];
-            fb[di+DISPLAY_W+1] = r3[yy+rd] + g3[yy-gd] + b3[yy+bd];
+            fb[di+DISPLAY_W+1] = rBR[yy+rd] + gBR[yy-gd] + bBR[yy+bd];
 
             yi += 2;
             di += 2;
@@ -255,11 +312,25 @@ static void __not_in_flash_func(render_2x)(uint8_t *fb, plm_frame_t *frame) {
     if (cols > 80) cols = 80;
     if (rows > 60) rows = 60;
 
+    /* For 2x upscale, each source pixel fills a 2x2 dest block of one
+     * colour, so all 4 dest pixels in that block share one Bayer
+     * threshold. The 4 source-pixel positions per chroma block (TL, TR,
+     * BL, BR) get 4 different threshold positions chosen from the 4x4
+     * Bayer matrix to maximise per-source-pixel variation -- the
+     * Bayer cells {(0,0),(2,1),(1,3),(3,2)} sit at near-equal value
+     * gaps, so this gives an even threshold distribution. */
+    static const uint8_t kSrc4[4] = {
+        /* (0,0)=0, (2,1)=14, (1,3)=11, (3,2)=13 */
+        0 * 4 + 0,
+        1 * 4 + 2,
+        3 * 4 + 1,
+        2 * 4 + 3,
+    };
     const uint8_t *rp[4], *gp[4], *bp[4];
-    for (int p = 0; p < 4; p++) {
-        rp[p] = G.dt + (p*3+0)*DT_SZ + DT_BIAS;
-        gp[p] = G.dt + (p*3+1)*DT_SZ + DT_BIAS;
-        bp[p] = G.dt + (p*3+2)*DT_SZ + DT_BIAS;
+    for (int i = 0; i < 4; i++) {
+        rp[i] = DT_R(kSrc4[i]);
+        gp[i] = DT_G(kSrc4[i]);
+        bp[i] = DT_B(kSrc4[i]);
     }
 
     uint8_t yl0[LINE_BUF_W], yl1[LINE_BUF_W];
