@@ -641,13 +641,21 @@ void player_play(const char *path) {
         }
 
         if (G.audio_inited) {
-            int max_audio = 4;
+            /* Audio pacing: pull until the ring is mostly full, capped
+             * per main-loop iter so a long audio burst can't starve
+             * video decode. The original audio_target_s / video PTS
+             * gate caused permanent audio lag on Sintel because pl_mpeg
+             * never got asked to decode while the video was catching up;
+             * gating purely on ring-fullness keeps audio pinned to the
+             * I2S consumption rate (44.1 kHz) regardless of video state.
+             *
+             * Heavy scenes that push CPU above 100% real-time briefly
+             * underrun the ring (DMA silence-pads, audible gap) instead
+             * of letting audio drift behind video. */
+            int max_audio = 5;
             if (G.time_debt > 30) max_audio = 1;
-            float audio_target_s = plm_video_get_time(G.plm->video_decoder)
-                                 + 0.05f;
             for (int i = 0; i < max_audio; i++) {
-                if (plm_audio_get_time(G.plm->audio_decoder) >= audio_target_s) break;
-                if (i2s_audio_stream_free() < 1500) break;
+                if (i2s_audio_stream_free() < 1200) break;
                 plm_samples_t *as = plm_decode_audio(G.plm);
                 if (!as) break;
                 on_audio(G.plm, as, NULL);
