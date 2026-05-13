@@ -436,6 +436,17 @@ void player_play(const char *path) {
     if (g_fb_back)     memset(g_fb_back,     0, DISPLAY_W * DISPLAY_H);
     setup_palette();
 
+    /* The PSRAM allocator is a bump allocator -- psram_free() is a no-op.
+     * Each playback allocates a 256 KB stream ring (and a few smaller
+     * pl_mpeg structs) in PSRAM that would otherwise leak across clips,
+     * so after ~28 plays we exhaust the 7 MB perm pool and the device
+     * hangs (HDMI signal disappears, screen goes black, no sound).
+     *
+     * Mark the current PSRAM offset before any allocation; the cleanup
+     * path at the end of player_play() rolls the bump pointer back to
+     * here, freeing every PSRAM allocation made during this playback. */
+    psram_mark_session();
+
     init_tables();
 
     /* core1 is intentionally left dormant: an earlier multicore render
@@ -448,6 +459,7 @@ void player_play(const char *path) {
         printf("player: cannot open %s\n", path ? path : "(null)");
         if (G.fil) free(G.fil);
         free(G.y_tab); free(G.dt);
+        psram_restore_session();
         return;
     }
 
@@ -460,6 +472,7 @@ void player_play(const char *path) {
         printf("player: not a valid MPEG-1 file\n");
         f_close(G.fil); free(G.fil);
         free(G.y_tab); free(G.dt);
+        psram_restore_session();
         return;
     }
 
@@ -653,6 +666,16 @@ void player_play(const char *path) {
     f_close(G.fil); free(G.fil);
     free(G.y_tab); G.y_tab = NULL;
     free(G.dt);    G.dt = NULL;
+
+    /* Roll the PSRAM bump pointer back to where it was before this
+     * playback. This reclaims the stream ring and any pl_mpeg internals
+     * that landed in PSRAM, so successive plays don't exhaust the perm
+     * pool. plm_destroy() above only un-registers the C-level pointers;
+     * the underlying PSRAM bytes can't be freed individually with this
+     * allocator, so the session-mark mechanism is what actually returns
+     * the memory. */
+    psram_restore_session();
+
     /* Clear both framebuffers and put HDMI back on the canonical front
      * pointer so the file browser repaints into the buffer it expects. */
     if (g_framebuffer) memset(g_framebuffer, 0, DISPLAY_W * DISPLAY_H);
