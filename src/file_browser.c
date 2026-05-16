@@ -292,14 +292,15 @@ static void draw_header(void) {
     fill_rect(0, 0, DISPLAY_W, 36, PAL_BG);
     fill_rect(0, 36, DISPLAY_W, 2, PAL_ACCENT);
 
-    const char *title = "FRANK-VIDEO  MPEG-1 Player";
-    draw_text((DISPLAY_W - text_width(title)) / 2, 12, title, PAL_FG);
-#ifndef FRANK_VERSION
-#define FRANK_VERSION "?"
-#endif
-    char ver[32];
-    snprintf(ver, sizeof(ver), "v%s", FRANK_VERSION);
-    draw_text(DISPLAY_W - text_width(ver) - 6, 24, ver, PAL_FG_DARK);
+    /* Two left-aligned lines: title + author byline on top, project
+     * URL below it. The version string moved to the footer
+     * (bottom-right) so the header stays clean and the user has a
+     * single status line for shortcuts and build identity. */
+    const char *title = "FRANK VIDEO MPEG-1 PLAYER / BY MIKHAIL MATVEEV";
+    draw_text(8, 8, title, PAL_FG);
+
+    const char *url = "github.com/rh1tech/frank-video";
+    draw_text(8, 22, url, PAL_FG_DARK);
 }
 
 static void draw_footer(void) {
@@ -312,6 +313,13 @@ static void draw_footer(void) {
     char hint1[64];
     snprintf(hint1, sizeof(hint1), "%s NAVIGATE   ENTER PLAY   ESC EXIT", up_dn);
     draw_text(8, y + 4, hint1, PAL_FG_DARK);
+
+#ifndef FRANK_VERSION
+#define FRANK_VERSION "?"
+#endif
+    char ver[32];
+    snprintf(ver, sizeof(ver), "v%s", FRANK_VERSION);
+    draw_text(DISPLAY_W - text_width(ver) - 6, y + 4, ver, PAL_FG_DARK);
 }
 
 static void draw_list(void) {
