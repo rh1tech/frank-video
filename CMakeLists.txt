@@ -40,10 +40,19 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-# --- FatFS + SD + PS/2 driver subdirs --------------------------------------
+# --- USB HID host (optional, swaps native USB from CDC->Host) --------------
+#
+# USB_HID_ENABLED=ON brings up TinyUSB Host on the native USB controller so
+# a USB keyboard works alongside the PS/2 one. The native controller can't
+# be both Host and Device, so CDC stdio is disabled in that build (debug
+# output goes to UART instead). Default OFF keeps the USB serial console.
+option(USB_HID_ENABLED "Enable USB HID host (disables USB CDC stdio)" OFF)
+
+# --- FatFS + SD + PS/2 + (optional) USB HID driver subdirs -----------------
 add_subdirectory(src/fatfs)
 add_subdirectory(drivers/sdcard)
 add_subdirectory(drivers/ps2kbd)
+add_subdirectory(drivers/usbhid)
 
 # --- Video output selection ------------------------------------------------
 #
@@ -247,12 +256,21 @@ target_link_libraries(frank-video
     hardware_watchdog
     sdcard
     ps2kbd
+    usbhid
     fatfs
     drivers
 )
 
-# USB CDC stdio with 4-second connect delay handled in src/main.c.
-pico_enable_stdio_usb(frank-video 1)
-pico_enable_stdio_uart(frank-video 0)
+# USB stdio: device-mode CDC by default (4-second wait in main.c). When
+# USB_HID_ENABLED is on, the native USB is owned by TinyUSB Host instead,
+# so route stdio over UART. main.c also skips its USB-wait loop in that
+# build via the same USB_HID_ENABLED define propagated by the usbhid lib.
+if(USB_HID_ENABLED)
+    pico_enable_stdio_usb(frank-video 0)
+    pico_enable_stdio_uart(frank-video 1)
+else()
+    pico_enable_stdio_usb(frank-video 1)
+    pico_enable_stdio_uart(frank-video 0)
+endif()
 
 pico_add_extra_outputs(frank-video)

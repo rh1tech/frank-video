@@ -10,6 +10,7 @@
 #include "board_config.h"
 #include "HDMI.h"
 #include "ps2kbd_wrapper.h"
+#include "usbhid_wrapper.h"
 #include "ff.h"
 
 #include "pico/stdlib.h"
@@ -357,6 +358,35 @@ static void clamp_scroll(void) {
 
 /* ===== Public entry ===================================================== */
 
+void file_browser_show_error(const char *title, const char *line1,
+                             const char *line2) {
+    if (!g_framebuffer) return;
+
+    browser_palette_load();
+    /* Repurpose PAL_ACCENT as the error accent so we don't need a sixth
+     * palette entry. */
+    graphics_set_palette(PAL_ACCENT, 0xFF5050);
+
+    memset(g_framebuffer, 0, DISPLAY_W * DISPLAY_H);
+
+    /* Accent bar across the top, mirroring the browser's header rule. */
+    fill_rect(0, 36, DISPLAY_W, 2, PAL_ACCENT);
+
+    if (title) {
+        draw_text((DISPLAY_W - text_width(title)) / 2, 14, title, PAL_ACCENT);
+    }
+    if (line1) {
+        draw_text((DISPLAY_W - text_width(line1)) / 2, 100, line1, PAL_FG);
+    }
+    if (line2) {
+        draw_text((DISPLAY_W - text_width(line2)) / 2, 116, line2, PAL_FG_DARK);
+    }
+
+    const char *hint = "RESET AFTER INSERTING SD CARD";
+    draw_text((DISPLAY_W - text_width(hint)) / 2, DISPLAY_H - 24, hint,
+              PAL_FG_DARK);
+}
+
 void file_browser_init(void) {
     /* Nothing to allocate yet -- the list buffer is static. The first call
      * to file_browser_show() loads the palette and runs a scan. */
@@ -378,12 +408,18 @@ bool file_browser_show(char *out_path, int out_path_len) {
 
     while (true) {
         ps2kbd_tick();
+        /* USB HID is pumped from a 1 kHz timer in main.c; here we just
+         * drain its queue alongside the PS/2 one. Both deliver the same
+         * USB HID usage codes so the handler doesn't care which keyboard
+         * actually produced the event. usbhid_wrapper_get_event() is a
+         * stub returning 0 in the default (USB CDC) build. */
 
         int pressed;
         uint8_t code;
         bool dirty = false;
 
-        while (ps2kbd_get_event(&pressed, &code)) {
+        while (ps2kbd_get_event(&pressed, &code) ||
+               usbhid_wrapper_get_event(&pressed, &code)) {
             if (!pressed) continue;
 
             if (code == HID_KEY_ESCAPE) return false;

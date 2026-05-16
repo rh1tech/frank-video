@@ -24,12 +24,17 @@
 #include "sdcard.h"
 #include "ff.h"
 #include "ps2kbd_wrapper.h"
+#include "usbhid_wrapper.h"
 
 #include "file_browser.h"
 #include "player.h"
 
 #include <stdio.h>
 #include <string.h>
+
+#ifdef USB_HID_ENABLED
+#include "pico/time.h"
+#endif
 
 #define DISPLAY_W 320
 #define DISPLAY_H 240
@@ -85,12 +90,28 @@ static void wait_for_usb_serial(uint32_t ms) {
      *   1. Give the host's USB stack time to enumerate the CDC device so
      *      the first printf() lines actually reach the user.
      *   2. Provide a uniform 4 s "press BOOTSEL now" window if the user
-     *      wants to recover the device after an OC misadventure. */
+     *      wants to recover the device after an OC misadventure.
+     *
+     * In USB_HID builds the native USB controller is owned by the TinyUSB
+     * host stack, so there is no CDC device to wait for -- main() skips
+     * this entirely and starts immediately. */
     const uint32_t deadline = to_ms_since_boot(get_absolute_time()) + ms;
     while (to_ms_since_boot(get_absolute_time()) < deadline) {
         sleep_ms(50);
     }
 }
+
+#ifdef USB_HID_ENABLED
+/* The HID host needs tuh_task() pumped at ~1 kHz so reports don't queue
+ * up between video frames. The video player runs at ~24 Hz so calling
+ * usbhid_wrapper_task() from the render loop alone would lag noticeably.
+ * A repeating timer on the alarm pool drains the queue independently. */
+static bool usb_hid_pump_cb(repeating_timer_t *rt) {
+    (void)rt;
+    usbhid_wrapper_task();
+    return true;
+}
+#endif
 
 static bool mount_sd(void) {
     FRESULT fr = f_mount(&fs, "", 1);
@@ -103,27 +124,25 @@ static bool mount_sd(void) {
 }
 
 static void show_sd_error_screen(void) {
-    if (!g_framebuffer) return;
-    /* Minimal red-on-black error -- we may never have run the browser yet,
-     * so its palette isn't loaded. Index 1 (red) is enough. */
-    graphics_set_palette(0, 0x000000);
-    graphics_set_palette(1, 0xFF4040);
-    memset(g_framebuffer, 0, DISPLAY_W * DISPLAY_H);
-    /* Three diagonal stripes -- crude but visible. */
-    for (int y = 100; y < 140; y++) {
-        for (int x = 60; x < 260; x += 1) {
-            if (((x + y) & 0x07) < 4) g_framebuffer[y * DISPLAY_W + x] = 1;
-        }
-    }
+    /* Defer to the browser's font/palette so the user gets a readable
+     * message instead of a placeholder stripe pattern. */
+    file_browser_show_error("SD CARD ERROR",
+                            "NO SD CARD DETECTED",
+                            "INSERT A FAT-FORMATTED CARD WITH MPG FILES");
 }
 
 int main(void) {
     /* 1. Voltage + flash timing + system clock. */
     overclock_and_init_clocks();
 
-    /* 2. USB CDC stdio with a 4 s grace window for the host. */
+    /* 2. stdio. In the default (USB CDC) build wait 4 s for the host to
+     * enumerate so the boot log reaches the user. In USB_HID builds CDC
+     * is gone -- stdio routes to UART, which is up immediately, so no
+     * wait is needed. */
     stdio_init_all();
+#ifndef USB_HID_ENABLED
     wait_for_usb_serial(4000);
+#endif
 
     printf("\nfrank-video " FRANK_VERSION "\n");
     printf("clk_sys = %lu MHz\n", clock_get_hz(clk_sys) / 1000000);
@@ -167,6 +186,17 @@ int main(void) {
     /* 7. PS/2 keyboard. */
     ps2kbd_init();
     printf("PS/2 keyboard: ready\n");
+
+#ifdef USB_HID_ENABLED
+    /* 7b. USB HID host. PS/2 stays connected; both queues are drained in
+     * the browser/player loops so either kind of keyboard works. */
+    usbhid_wrapper_init();
+    printf("USB HID host: ready\n");
+    {
+        static repeating_timer_t s_usb_timer;
+        add_repeating_timer_us(-1000, usb_hid_pump_cb, NULL, &s_usb_timer);
+    }
+#endif
 
     /* 8. Browser <-> player loop. */
     file_browser_init();

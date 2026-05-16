@@ -29,6 +29,12 @@ void file_browser_init(void);
  * Returns false if there are no files or the user pressed ESC. */
 bool file_browser_show(char *out_path, int out_path_len);
 
+/* Render a full-screen error message using the browser's 5x7 font and
+ * palette. Used by main() when the SD card can't be mounted, before the
+ * browser has ever run. Safe to call as long as g_framebuffer is set. */
+void file_browser_show_error(const char *title, const char *line1,
+                             const char *line2);
+
 #ifdef __cplusplus
 }
 #endif
