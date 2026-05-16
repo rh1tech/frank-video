@@ -168,9 +168,9 @@ Build all release variants (M1/HDMI, M2/HDMI, M2/HDMI_ALT — all at 504/166/66 
 
 This produces three UF2 files in `release/`:
 
-- `m1p2_frank-video_<version>.uf2` — M1 board, legacy PIO HDMI + I2S audio
-- `m2p2_frank-video_<version>.uf2` — M2 board, legacy PIO HDMI + I2S audio
-- `m2p2alt_frank-video_<version>.uf2` — M2 board, HSTX HDMI with HDMI audio (no I2S needed)
+- `m1p2_hdmi_pio_frank-video_<version>.uf2` — M1 board, legacy PIO HDMI + I2S audio
+- `m2p2_hdmi_pio_frank-video_<version>.uf2` — M2 board, legacy PIO HDMI + I2S audio
+- `m2p2_hdmi_hstx_frank-video_<version>.uf2` — M2 board, HSTX HDMI with HDMI audio (no I2S needed)
 
 ### Flashing
 

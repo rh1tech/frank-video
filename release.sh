@@ -18,9 +18,9 @@
 # Output format: <prefix>frank-video_A_BB.uf2
 #
 # Build matrix (3 variants):
-#   m1p2_frank-video_*.uf2       (M1, legacy PIO HDMI + I2S audio)
-#   m2p2_frank-video_*.uf2       (M2, legacy PIO HDMI + I2S audio)
-#   m2p2alt_frank-video_*.uf2    (M2, HSTX HDMI with HDMI audio over Data Islands)
+#   m1p2_hdmi_pio_frank-video_*.uf2    (M1, legacy PIO HDMI + I2S audio)
+#   m2p2_hdmi_pio_frank-video_*.uf2    (M2, legacy PIO HDMI + I2S audio)
+#   m2p2_hdmi_hstx_frank-video_*.uf2   (M2, HSTX HDMI with HDMI audio over Data Islands)
 #
 # All variants ship at 504 MHz CPU / 166 MHz PSRAM / 66 MHz Flash.
 # USB HID host is enabled, USB CDC stdio is disabled.
@@ -45,9 +45,9 @@ RELEASE_FLASH_SPEED="${RELEASE_FLASH_SPEED:-66}"
 
 # Build matrix: "board_variant:hstx_flag:prefix"
 BUILD_MATRIX=(
-    "M1:OFF:m1p2_"
-    "M2:OFF:m2p2_"
-    "M2:ON:m2p2alt_"
+    "M1:OFF:m1p2_hdmi_pio_"
+    "M2:OFF:m2p2_hdmi_pio_"
+    "M2:ON:m2p2_hdmi_hstx_"
 )
 
 # Version file
