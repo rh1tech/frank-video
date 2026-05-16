@@ -12,10 +12,17 @@
 #                     decode cost is roughly the average decode cost.
 #   320x240         : display-native, no runtime scaling.
 #   24 fps          : matches typical movie source rate.
-#   -q:v 6          : aggressive quality target for I-frame-only
-#                     content. Files run larger than predictive encodes
-#                     but decode is what we are budget-limited on, not
-#                     SD bandwidth.
+#   -q:v 14         : moderate-aggressive quantization. pl_mpeg's IDCT
+#                     cost is proportional to the number of non-zero AC
+#                     coefficients in each block, which means a busy
+#                     frame at low qp blows the realtime budget on
+#                     RP2350 even though the bytes-per-frame stays
+#                     bounded. q=14 caps max frame at ~7-8 KB across
+#                     all content (vs 16 KB at q=6), and the per-frame
+#                     decode time becomes much more even -- no more
+#                     scene-dependent freezes. Quality drop is
+#                     barely visible at 320x240 and is well worth the
+#                     stability.
 #   yuv420p         : pl_mpeg expects 4:2:0 chroma.
 #   Audio: 32000 Hz mono MP2 @ 64 kbps. The lowest sample rate that
 #                     selects MPEG-1 Layer-II (rather than MPEG-2 LSF);
@@ -65,7 +72,7 @@ ffmpeg -y -i "$INPUT" \
     -vf "$VFILTER" \
     -r 24 \
     -c:v mpeg1video -pix_fmt yuv420p \
-    -q:v 6 -g 1 -bf 0 \
+    -q:v 14 -g 1 -bf 0 \
     -c:a mp2 -b:a 64k -ar 32000 -ac 1 \
     -f mpeg "$OUTPUT"
 

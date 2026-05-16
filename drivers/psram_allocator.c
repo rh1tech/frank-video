@@ -139,13 +139,45 @@ void *psram_realloc(void *ptr, size_t new_size) {
             return ptr; // Shrink or same size: do nothing
         }
 
-        // We need to allocate new memory, which requires locking
-        // psram_malloc handles locking internally, so we are safe there.
+        // Round up like psram_malloc does so the in-place check is exact.
+        size_t aligned_new = (new_size + 3) & ~3;
+
+        // In-place grow: the bump allocator can extend the most-recent
+        // allocation if there's room above it. This is the only way to
+        // safely grow in PSRAM since freeing earlier blocks is impossible
+        // (it's a forward-only bump pointer). Without this, pl_mpeg's
+        // doubling realloc on the audio/video sub-buffers leaks every
+        // generation and quickly exhausts the 7 MB perm pool.
+        if (!psram_temp_mode) {
+            if (!psram_lock) {
+                int lock_num = spin_lock_claim_unused(true);
+                psram_lock = spin_lock_instance(lock_num);
+            }
+            uint32_t save = save_and_disable_interrupts();
+            spin_lock_blocking(psram_lock);
+
+            // ptr's tail is at psram_start + (psram_offset's pre-bump). If
+            // header sits exactly at psram_offset - old_size - sizeof(size_t),
+            // this allocation is the most recent and we can extend it in place.
+            size_t header_off = (uintptr_t)header - (uintptr_t)psram_start;
+            size_t alloc_total = old_size + sizeof(size_t);
+            if (header_off + alloc_total == psram_offset &&
+                psram_offset + (aligned_new - old_size) <= PERM_SIZE) {
+                psram_offset += (aligned_new - old_size);
+                *header = aligned_new;
+                spin_unlock(psram_lock, save);
+                return ptr;
+            }
+            spin_unlock(psram_lock, save);
+        }
+
+        // Not extendable in place: must allocate fresh and copy. The old
+        // block leaks (bump allocator can't free), so frequent grows of
+        // non-tail blocks will exhaust PSRAM. Callers should prefer
+        // tail-extension whenever possible.
         void *new_ptr = psram_malloc(new_size);
         if (new_ptr) {
-            // memcpy is safe as long as we own the pointers
             memcpy(new_ptr, ptr, old_size);
-            // psram_free(ptr); // No-op for bump allocator
         }
         return new_ptr;
     }

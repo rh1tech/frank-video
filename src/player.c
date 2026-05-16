@@ -463,6 +463,49 @@ static void __not_in_flash_func(on_audio)(plm_t *mpeg, plm_samples_t *samples, v
     on_audio_skip(mpeg, samples, 0);
 }
 
+/* Drain the underrun count into the drop budget (capped) and refill the
+ * HSTX queue with as many audio chunks as fit. Called between every
+ * video decode so a long video burst can't silence audio for >40 ms.
+ *
+ * Important: gate on BOTH the HSTX queue level AND pl_mpeg's audio
+ * time. Without the second gate, calling plm_decode_audio when the
+ * audio_buffer is already empty triggers plm_read_audio_packet to
+ * demux through the master buffer looking for the next audio packet,
+ * which fills BOTH the audio AND video sub-buffers along the way.
+ * On a heavy video frame those sub-buffers can grow (via realloc)
+ * faster than they drain, doubling each grow until the bump allocator
+ * is exhausted (PSRAM Perm OOM). Stopping pump_audio at audio_lead_time
+ * keeps demux pressure off the sub-buffers. */
+static void __not_in_flash_func(pump_audio)(void) {
+    if (!G.audio_inited) return;
+
+    G.audio_drop_budget += i2s_audio_consume_underrun_frames();
+    int sr = plm_get_samplerate(G.plm);
+    uint32_t budget_max = (uint32_t)(sr / 20); /* 50 ms cap */
+    if (G.audio_drop_budget > budget_max) G.audio_drop_budget = budget_max;
+
+    for (int i = 0; i < 5; i++) {
+        if (i2s_audio_stream_free() < 1200) break;
+        /* Stop pre-decoding once audio is at or beyond video PTS by
+         * the lead time we set (200 ms). Otherwise plm_decode_audio
+         * will demux deeper and grow the intermediate buffers. */
+        float vt = plm_video_get_time(G.plm->video_decoder);
+        float at = plm_audio_get_time(G.plm->audio_decoder);
+        if (at > vt + 0.20f) break;
+
+        plm_samples_t *as = plm_decode_audio(G.plm);
+        if (!as) break;
+        int skip = 0;
+        if (G.audio_drop_budget > 0) {
+            skip = G.audio_drop_budget < (uint32_t)as->count
+                   ? (int)G.audio_drop_budget : (int)as->count;
+            G.audio_drop_budget -= (uint32_t)skip;
+            G.prof_audio_dropped += (uint32_t)skip;
+        }
+        on_audio_skip(G.plm, as, skip);
+    }
+}
+
 /* ===== File I/O callbacks ============================================== */
 
 static void __not_in_flash_func(plm_load_cb)(plm_buffer_t *buf, void *user) {
@@ -655,65 +698,52 @@ void player_play(const char *path) {
         float wall_pos_s = (float)(now - playback_start_ms) * 0.001f;
         float video_target_s = wall_pos_s + 0.010f;  /* 10 ms ahead */
 
-        /* Audio FIRST so a heavy video frame can't empty the HSTX queue.
+        /* Up to 4 video decodes per iter to absorb spikey content, but
+         * pump audio between every single decode so a long burst can't
+         * drain the HSTX queue.
          *
-         * Drift compensation: every silence packet the consumer emits
-         * during a queue underrun shifts subsequent real audio later
-         * by 4/sample_rate seconds. Without compensation that delay
-         * accumulates monotonically and audio falls progressively
-         * behind video. We poll the consumer's underrun count, treat
-         * it as a "frames-to-drop" budget, and discard pl_mpeg samples
-         * until the budget is paid back. The held silence already
-         * played acts as a substitute for those dropped frames, so the
-         * downstream timeline stays aligned with the source PTS. */
-        if (G.audio_inited) {
-            G.audio_drop_budget += i2s_audio_consume_underrun_frames();
-            /* Cap the drop budget at ~50 ms of audio. Without a cap a
-             * one-off pile-up (e.g. SD card pause, init lag) would let
-             * us drop chunks for many seconds and silence playback.
-             * 50 ms is enough drift to compensate the typical heavy-
-             * frame underrun without becoming audible. */
-            int sr = plm_get_samplerate(G.plm);
-            uint32_t budget_max = (uint32_t)(sr / 20);
-            if (G.audio_drop_budget > budget_max) G.audio_drop_budget = budget_max;
-            int max_audio = 5;
-            for (int i = 0; i < max_audio; i++) {
-                if (i2s_audio_stream_free() < 1200) break;
-                plm_samples_t *as = plm_decode_audio(G.plm);
-                if (!as) break;
-                /* Drop frames from the front of this chunk to spend
-                 * the underrun budget. Even sub-chunk budgets get
-                 * spent immediately so a 100-frame budget doesn't sit
-                 * forever waiting for a full 1152-frame drop opportunity. */
-                int skip = 0;
-                if (G.audio_drop_budget > 0) {
-                    skip = G.audio_drop_budget < (uint32_t)as->count
-                           ? (int)G.audio_drop_budget : (int)as->count;
-                    G.audio_drop_budget -= (uint32_t)skip;
-                    G.prof_audio_dropped += (uint32_t)skip;
-                }
-                on_audio_skip(G.plm, as, skip);
-            }
-        }
-
-        /* Video. When wall clock has run far ahead of the decoder, skip
-         * the render (don't blit to the framebuffer) but still decode
-         * the frame so the next P/B frame has its reference. With
-         * I-frame-only encoding (-g 1 -bf 0 from convert_video.sh) the
-         * skip loses no decode dependency, so we simply discard frames
-         * whose PTS is already >100 ms behind wall clock. That frees
-         * CPU on heavy scenes to keep the audio queue full. */
-        for (int i = 0; i < 4; i++) {
+         * I-frame-only encoding (-g 1 -bf 0 from convert_video.sh)
+         * means *every* frame is independently decodable -- no P/B
+         * reference dependency. So when video PTS is >100 ms behind
+         * wall clock, we can SKIP THE WHOLE DECODE (not just the
+         * render) by walking the video buffer past the next picture
+         * start code. plm_decode_video's IDCT cost on heavy I-frames
+         * (~50 ms each) is what makes the loop spend 200 ms per iter
+         * trying to catch up; skipping the decode entirely turns that
+         * into a few hundred microseconds of buffer scan and lets
+         * audio stay smooth. */
+        for (int v = 0; v < 4; v++) {
+            pump_audio();
             float vt = plm_video_get_time(G.plm->video_decoder);
             if (vt >= video_target_s) break;
+
+            if (vt + 0.10f < wall_pos_s) {
+                /* Drop without decoding. Walk past the next picture
+                 * start code so plm_video_decode skips this frame
+                 * entirely on the next call. */
+                plm_buffer_t *vb = G.plm->video_decoder->buffer;
+                if (plm_buffer_find_start_code(vb, 0x00) >= 0) {
+                    /* find_start_code positions the buffer right at
+                     * the start code; advance one byte so the next
+                     * find lands on the *following* picture. */
+                    plm_buffer_skip(vb, 1);
+                    /* Bump the audio decoder's video-time anchor so
+                     * pl_mpeg's internal time advances. */
+                    G.plm->video_decoder->time +=
+                        1.0f / plm_video_get_framerate(G.plm->video_decoder);
+                    G.plm->video_decoder->frames_decoded++;
+                    G.prof_frames_skipped++;
+                    continue;
+                }
+                /* Couldn't find a start code -- fall through to a
+                 * normal decode so we don't hang. */
+            }
+
             plm_frame_t *vf = plm_decode_video(G.plm);
             if (!vf) break;
-            if (vt + 0.10f < wall_pos_s) {
-                G.prof_frames_skipped++;
-            } else {
-                on_video(G.plm, vf, NULL);
-            }
+            on_video(G.plm, vf, NULL);
         }
+        pump_audio();
 
         if (plm_has_ended(G.plm)) {
             prof_decode_us += (time_us_64() - t0);
@@ -741,7 +771,16 @@ void player_play(const char *path) {
         if (vt > wall_pos_s + 0.005f) {
             uint32_t lead_ms = (uint32_t)((vt - wall_pos_s) * 1000.0f);
             if (lead_ms > 30) lead_ms = 30;
-            sleep_ms(lead_ms);
+            /* Break the idle wait into 5 ms slices so audio gets
+             * topped up while we're nominally idle -- otherwise a
+             * 30 ms sleep can underrun the queue on its own. */
+            uint32_t slept = 0;
+            while (slept < lead_ms) {
+                pump_audio();
+                uint32_t step = (lead_ms - slept) > 5 ? 5 : (lead_ms - slept);
+                sleep_ms(step);
+                slept += step;
+            }
         }
 
         /* Once-per-second profile dump over USB CDC. Numbers reflect the
