@@ -27,10 +27,19 @@ endif()
 message(STATUS "frank-video: Board=${BOARD_VARIANT} CPU=${CPU_SPEED} MHz "
         "PSRAM=${PSRAM_SPEED} MHz Flash=${FLASH_SPEED} MHz Voltage=${CPU_VOLTAGE}")
 
-# Inject version.txt as a compile-time string.
+# Inject version.txt as a compile-time string. version.txt is "MAJOR MINOR"
+# (space separated); minor is zero-padded to two digits, e.g. "1 0" -> "1.00",
+# "1 12" -> "1.12". Matches the frank-fodder release versioning.
 file(READ "${CMAKE_CURRENT_LIST_DIR}/version.txt" FRANK_VERSION_RAW)
 string(STRIP "${FRANK_VERSION_RAW}" FRANK_VERSION_RAW)
-string(REGEX REPLACE "[ \t]+" "." FRANK_VERSION "${FRANK_VERSION_RAW}")
+string(REGEX REPLACE "[ \t]+" ";" FRANK_VERSION_PARTS "${FRANK_VERSION_RAW}")
+list(GET FRANK_VERSION_PARTS 0 FRANK_VERSION_MAJOR)
+list(GET FRANK_VERSION_PARTS 1 FRANK_VERSION_MINOR)
+if(FRANK_VERSION_MINOR LESS 10)
+    set(FRANK_VERSION "${FRANK_VERSION_MAJOR}.0${FRANK_VERSION_MINOR}")
+else()
+    set(FRANK_VERSION "${FRANK_VERSION_MAJOR}.${FRANK_VERSION_MINOR}")
+endif()
 
 include(pico_sdk_import.cmake)
 
