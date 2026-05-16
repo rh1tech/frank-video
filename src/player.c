@@ -16,6 +16,7 @@
 #include "i2s_audio.h"
 #include "psram_allocator.h"
 #include "ps2kbd_wrapper.h"
+#include "usbhid_wrapper.h"
 #include "ff.h"
 #ifdef HDMI_HSTX
 #include "hstx_data_island_queue.h"
@@ -110,6 +111,8 @@ typedef struct {
     uint32_t  time_debt;
     uint8_t   skip_count;
     bool      audio_inited;
+    uint32_t  audio_drop_budget;  /* stereo frames the producer must drop to
+                                     compensate consumer-side silence packets */
     int       offset_x;
     int       offset_y;
     int       video_w;
@@ -427,29 +430,37 @@ static void __not_in_flash_func(on_video)(plm_t *mpeg, plm_frame_t *frame, void 
     G.prof_frames_rendered++;
 }
 
-static void __not_in_flash_func(on_audio)(plm_t *mpeg, plm_samples_t *samples, void *user) {
-    (void)mpeg; (void)user;
-    /* MPEG audio comes as float32 interleaved stereo in [-1,1]. Convert to
-     * int16 stereo at 25% (matches rhea's headroom choice) and push to I2S. */
+/* Convert pl_mpeg float samples to int16 stereo and push to the audio
+ * backend, optionally skipping the first `skip` frames so partial drift
+ * compensation works. Returns frames pushed (sans the skipped prefix). */
+static int __not_in_flash_func(on_audio_skip)(plm_t *mpeg, plm_samples_t *samples,
+                                              int skip) {
+    (void)mpeg;
     int n = (int)samples->count;
-    if (n <= 0) return;
+    if (n <= 0) return 0;
+    if (skip >= n) return 0;
+    int start = skip > 0 ? skip : 0;
+    int frames = n - start;
+    if (frames > 1152) frames = 1152;
 
     uint64_t t0 = time_us_64();
     static int16_t pcm[1152 * 2];
-    if (n > 1152) n = 1152;
-    for (int i = 0; i < n * 2; i++) {
-        int v = (int)(samples->interleaved[i] * 8192.0f);
+    for (int i = 0; i < frames * 2; i++) {
+        int v = (int)(samples->interleaved[(start * 2) + i] * 8192.0f);
         if (v >  32767) v =  32767;
         if (v < -32767) v = -32767;
         pcm[i] = (int16_t)v;
     }
-    /* Stream-mode push: appends into a software ring drained by the DMA
-     * IRQ. Decouples this 1152-frame producer call from the much smaller
-     * DMA chunk size so no chunk gets silence-padded mid-burst. */
-    int written = i2s_audio_stream_push(pcm, n);
-    if (written < n) G.prof_audio_dropped += (uint32_t)(n - written);
+    int written = i2s_audio_stream_push(pcm, frames);
+    if (written < frames) G.prof_audio_dropped += (uint32_t)(frames - written);
     G.prof_audio_cb_us += (time_us_64() - t0);
     G.prof_audio_calls++;
+    return written;
+}
+
+static void __not_in_flash_func(on_audio)(plm_t *mpeg, plm_samples_t *samples, void *user) {
+    (void)user;
+    on_audio_skip(mpeg, samples, 0);
 }
 
 /* ===== File I/O callbacks ============================================== */
@@ -489,7 +500,10 @@ static void process_input(void) {
     ps2kbd_tick();
     int pressed;
     uint8_t code;
-    while (ps2kbd_get_event(&pressed, &code)) {
+    /* Drain both keyboard sources. usbhid_wrapper_get_event() is a
+     * stub returning 0 in the default (USB CDC) build. */
+    while (ps2kbd_get_event(&pressed, &code) ||
+           usbhid_wrapper_get_event(&pressed, &code)) {
         if (!pressed) continue;
         if (code == HID_KEY_ESCAPE) { G.closing = true; return; }
         if (code == HID_KEY_SPACE)  { G.paused = !G.paused; }
@@ -575,14 +589,19 @@ void player_play(const char *path) {
         i2s_audio_set_frame_rate(172);
         plm_set_audio_enabled(G.plm, TRUE);
         plm_set_audio_decode_callback(G.plm, on_audio, NULL);
-        /* audio_lead_time controls how far ahead pl_mpeg decodes audio.
-         * Higher = bigger bursts of audio work in plm_decode() when video
-         * is behind. With our 16k-frame I2S ring already absorbing 370ms,
-         * we don't need pl_mpeg to look ahead at all -- 50ms is plenty to
-         * keep audio in sync. Halving from 200ms cuts the worst-case
-         * audio decode burst per plm_decode() call. */
-        plm_set_audio_lead_time(G.plm, 0.05f);
+        /* Pre-decode audio 200 ms ahead of video PTS. The HSTX consumer
+         * drains the queue at exactly sample_rate; if video decode of a
+         * heavy frame stalls the producer for >50 ms the queue empties
+         * and the receiver mutes (audible as crackling). 200 ms of
+         * lead lets pl_mpeg fill the queue while video catches up. */
+        plm_set_audio_lead_time(G.plm, 0.20f);
         G.audio_inited = true;
+        /* Discard any underrun counter accumulated before audio
+         * actually started flowing -- consumer ticks during startup
+         * before pl_mpeg produces its first chunk and would otherwise
+         * give us a phantom drop budget that silences playback. */
+        (void)i2s_audio_consume_underrun_frames();
+        G.audio_drop_budget = 0;
     } else {
         plm_set_audio_enabled(G.plm, FALSE);
     }
@@ -636,32 +655,63 @@ void player_play(const char *path) {
         float wall_pos_s = (float)(now - playback_start_ms) * 0.001f;
         float video_target_s = wall_pos_s + 0.010f;  /* 10 ms ahead */
 
-        for (int i = 0; i < 4; i++) {
-            if (plm_video_get_time(G.plm->video_decoder) >= video_target_s) break;
-            plm_frame_t *vf = plm_decode_video(G.plm);
-            if (!vf) break;
-            on_video(G.plm, vf, NULL);
-        }
-
+        /* Audio FIRST so a heavy video frame can't empty the HSTX queue.
+         *
+         * Drift compensation: every silence packet the consumer emits
+         * during a queue underrun shifts subsequent real audio later
+         * by 4/sample_rate seconds. Without compensation that delay
+         * accumulates monotonically and audio falls progressively
+         * behind video. We poll the consumer's underrun count, treat
+         * it as a "frames-to-drop" budget, and discard pl_mpeg samples
+         * until the budget is paid back. The held silence already
+         * played acts as a substitute for those dropped frames, so the
+         * downstream timeline stays aligned with the source PTS. */
         if (G.audio_inited) {
-            /* Audio pacing: pull until the ring is mostly full, capped
-             * per main-loop iter so a long audio burst can't starve
-             * video decode. The original audio_target_s / video PTS
-             * gate caused permanent audio lag on Sintel because pl_mpeg
-             * never got asked to decode while the video was catching up;
-             * gating purely on ring-fullness keeps audio pinned to the
-             * I2S consumption rate (44.1 kHz) regardless of video state.
-             *
-             * Heavy scenes that push CPU above 100% real-time briefly
-             * underrun the ring (DMA silence-pads, audible gap) instead
-             * of letting audio drift behind video. */
+            G.audio_drop_budget += i2s_audio_consume_underrun_frames();
+            /* Cap the drop budget at ~50 ms of audio. Without a cap a
+             * one-off pile-up (e.g. SD card pause, init lag) would let
+             * us drop chunks for many seconds and silence playback.
+             * 50 ms is enough drift to compensate the typical heavy-
+             * frame underrun without becoming audible. */
+            int sr = plm_get_samplerate(G.plm);
+            uint32_t budget_max = (uint32_t)(sr / 20);
+            if (G.audio_drop_budget > budget_max) G.audio_drop_budget = budget_max;
             int max_audio = 5;
-            if (G.time_debt > 30) max_audio = 1;
             for (int i = 0; i < max_audio; i++) {
                 if (i2s_audio_stream_free() < 1200) break;
                 plm_samples_t *as = plm_decode_audio(G.plm);
                 if (!as) break;
-                on_audio(G.plm, as, NULL);
+                /* Drop frames from the front of this chunk to spend
+                 * the underrun budget. Even sub-chunk budgets get
+                 * spent immediately so a 100-frame budget doesn't sit
+                 * forever waiting for a full 1152-frame drop opportunity. */
+                int skip = 0;
+                if (G.audio_drop_budget > 0) {
+                    skip = G.audio_drop_budget < (uint32_t)as->count
+                           ? (int)G.audio_drop_budget : (int)as->count;
+                    G.audio_drop_budget -= (uint32_t)skip;
+                    G.prof_audio_dropped += (uint32_t)skip;
+                }
+                on_audio_skip(G.plm, as, skip);
+            }
+        }
+
+        /* Video. When wall clock has run far ahead of the decoder, skip
+         * the render (don't blit to the framebuffer) but still decode
+         * the frame so the next P/B frame has its reference. With
+         * I-frame-only encoding (-g 1 -bf 0 from convert_video.sh) the
+         * skip loses no decode dependency, so we simply discard frames
+         * whose PTS is already >100 ms behind wall clock. That frees
+         * CPU on heavy scenes to keep the audio queue full. */
+        for (int i = 0; i < 4; i++) {
+            float vt = plm_video_get_time(G.plm->video_decoder);
+            if (vt >= video_target_s) break;
+            plm_frame_t *vf = plm_decode_video(G.plm);
+            if (!vf) break;
+            if (vt + 0.10f < wall_pos_s) {
+                G.prof_frames_skipped++;
+            } else {
+                on_video(G.plm, vf, NULL);
             }
         }
 

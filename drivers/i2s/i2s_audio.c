@@ -520,3 +520,10 @@ void i2s_audio_shutdown(void) {
     gpio_set_function(i2s_clock_base + 1, GPIO_FUNC_SIO);
     i2s_claimed = false;
 }
+
+/* Legacy I2S driver pads short DMA bursts with silence inline; the
+ * silence is invisible to the producer so we have nothing to report.
+ * The real implementation lives in HDMI_hstx_audio.c. */
+uint32_t i2s_audio_consume_underrun_frames(void) {
+    return 0;
+}

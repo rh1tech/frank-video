@@ -176,3 +176,15 @@ void i2s_audio_shutdown(void) {
     g_inited = false;
     hstx_di_queue_update_silence(0);
 }
+
+/* Track how many silence packets the HSTX consumer has emitted between
+ * calls so the producer can drop the equivalent number of stereo frames
+ * and stay aligned with wall clock. Each silence packet is 4 frames. */
+static uint32_t g_last_underrun_count = 0;
+
+uint32_t i2s_audio_consume_underrun_frames(void) {
+    uint32_t cur = hstx_di_queue_get_underrun_count();
+    uint32_t delta = cur - g_last_underrun_count;
+    g_last_underrun_count = cur;
+    return delta * 4;
+}

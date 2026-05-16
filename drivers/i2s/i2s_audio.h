@@ -83,6 +83,18 @@ void i2s_audio_set_frame_rate(int frame_rate);
  */
 void i2s_audio_shutdown(void);
 
+/**
+ * Number of stereo audio frames the consumer has had to substitute with
+ * silence since the last call (clears on read). The producer can use
+ * this to drop an equivalent number of input frames so audio stays
+ * aligned with wall clock when the queue underruns.
+ *
+ * On the legacy I2S backend (drivers/i2s/i2s_audio.c) the DMA layer
+ * silence-pads short bursts internally and reports 0; only the HSTX
+ * backend reports real underrun frames.
+ */
+uint32_t i2s_audio_consume_underrun_frames(void);
+
 #ifdef __cplusplus
 }
 #endif
