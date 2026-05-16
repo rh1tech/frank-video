@@ -2,7 +2,17 @@
 
 Official page: **[frank.rh1.tech](https://frank.rh1.tech/)** — hub for all FRANK boards and firmware.
 
-FRANK Video is an MPEG-1 video player for Raspberry Pi Pico 2 (RP2350) — runs on FRANK boards with HDMI output, SD card streaming, PS/2 keyboard, and optional USB HID host. Plays 320×240 MPEG-1 video with stereo MPEG-1 Layer-II audio in real time, decoded by [pl_mpeg](https://github.com/phoboslab/pl_mpeg).
+FRANK Video is an MPEG-1 video player for Raspberry Pi Pico 2 (RP2350) — runs on FRANK boards with HDMI output, SD card streaming, PS/2 or USB keyboard. Plays 320×240 MPEG-1 video with stereo MPEG-1 Layer-II audio in real time, decoded by [pl_mpeg](https://github.com/phoboslab/pl_mpeg).
+
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/screen1.png" width="45%" alt="FRANK Video screen 1" />
+  <img src="screenshots/screen2.png" width="45%" alt="FRANK Video screen 2" />
+</p>
+<p align="center">
+  <img src="screenshots/screen3.png" width="45%" alt="FRANK Video screen 3" />
+</p>
 
 ## Supported Platforms
 
@@ -10,9 +20,9 @@ frank-video supports two RP2350 hardware variants and two HDMI back-ends. Pin as
 
 | Platform | Board | Video | Audio |
 |----------|-------|-------|-------|
-| **M1** | Murmulator 1.x | HDMI (PIO) | I2S |
 | **M2** | [FRANK](https://rh1.tech/projects/frank?area=about) / [Murmulator 2.0](https://murmulator.ru) | HDMI (PIO) | I2S |
-| **M2 / HDMI_ALT** | FRANK / Murmulator 2.0 | HDMI (HSTX) | HDMI Audio (Data Islands) |
+| **M2** | FRANK / Murmulator 2.0 | HDMI (HSTX) | HDMI Audio (Data Islands) |
+| **M1** | Murmulator 1.x | HDMI (PIO) | I2S |
 
 The default build target is **M2**. The HDMI_ALT variant uses RP2350's native HSTX peripheral for HDMI output and embeds audio inside the HDMI stream as Data Island packets — a single HDMI cable carries both video and audio, no I2S DAC needed.
 
@@ -26,8 +36,7 @@ The default build target is **M2**. The HDMI_ALT variant uses RP2350's native HS
 - SD card data loading (FAT32) for the video files
 - 6×6×6 sRGB-correct paletted output with 4×4 Bayer ordered dither
 - File browser UI with self-contained 5×7 font, scroll, paged navigation
-- PS/2 keyboard support (always on)
-- Optional USB HID host (USB keyboard alongside PS/2)
+- PS/2 and USB keyboard support
 - All-I-frame MPEG-1 conversion script (`tools/convert_video.sh`) tuned for RP2350's realtime decode budget
 
 ## Hardware Requirements
@@ -220,7 +229,6 @@ This project builds on a long chain of open-source work. frank-video is the RP23
 Special thanks to:
 
 - **Dominic Szablewski (phoboslab)** for pl_mpeg, the single-header MPEG-1 decoder that makes this whole project tractable.
-- **DnCraptor** for the pico-spec project — the PIO HDMI driver patterns used here trace back to that work.
 - **fliperama86** for pico_hdmi — the HSTX driver and HDMI Data Island packet code is adapted from that project.
 - **shuichitakano** for the original pico-infones port that inspired the Pico-side audio approach across the rh1tech projects.
 - **ChaN** for FatFS, the lifeblood of every SD-card-using Pico project.
